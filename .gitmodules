@@ -1,0 +1,6 @@
+[submodule "fabric-snippets"]
+	path = fabric-snippets
+	url = https://github.com/teaching-on-testbeds/fabric-snippets.git
+[submodule "chameleon-snippets"]
+	path = chameleon-snippets
+	url = https://github.com/teaching-on-testbeds/chameleon-snippets.git
