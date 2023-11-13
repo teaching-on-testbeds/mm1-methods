@@ -47,17 +47,17 @@ conf = fablib.show_config()
 slice_name="mm1-" + fablib.get_bastion_username()
 
 node_conf = [
- {'name': "romeo",   'cores': 2, 'ram': 4, 'disk': 10, 'image': 'default_ubuntu_22', 'packages': ['d-itg', 'ns2']}, 
- {'name': "juliet",  'cores': 2, 'ram': 4, 'disk': 10, 'image': 'default_ubuntu_22', 'packages': ['d-itg']}, 
- {'name': "router",  'cores': 2, 'ram': 4, 'disk': 10, 'image': 'default_ubuntu_22', 'packages': ['tshark']}
+ {'name': "romeo",   'cores': 2, 'ram': 4, 'disk': 10, 'image': 'default_ubuntu_22', 'packages': ['d-itg', 'iperf3', 'ns2']}, 
+ {'name': "juliet",  'cores': 2, 'ram': 4, 'disk': 10, 'image': 'default_ubuntu_22', 'packages': ['d-itg', 'iperf3']}, 
+ {'name': "router",  'cores': 2, 'ram': 4, 'disk': 10, 'image': 'default_ubuntu_22', 'packages': ['tshark', 'moreutils']}
 ]
 net_conf = [
  {"name": "net1", "subnet": "10.0.1.0/24", "nodes": [{"name": "romeo",   "addr": "10.0.1.100"}, {"name": "router", "addr": "10.0.1.10"}]},
  {"name": "net2", "subnet": "10.0.2.0/24", "nodes": [{"name": "juliet",  "addr": "10.0.2.100"}, {"name": "router", "addr": "10.0.2.10"}]}
 ]
 route_conf = [
- {"addr": "10.0.2.0/24", "gw": "10.0.0.10", "nodes": ["romeo"]},
- {"addr": "10.0.1.0/24", "gw": "10.0.1.10", "nodes": ["juliet"]}
+ {"addr": "10.0.2.0/24", "gw": "10.0.1.10", "nodes": ["romeo"]},
+ {"addr": "10.0.1.0/24", "gw": "10.0.2.10", "nodes": ["juliet"]}
 ]
 exp_conf = {'cores': sum([ n['cores'] for n in node_conf]), 'nic': sum([len(n['nodes']) for n in net_conf]) }
 ```
@@ -156,7 +156,7 @@ for n in node_conf:
     if len(n['packages']):
         node = slice.get_node(n['name'])
         pkg = " ".join(n['packages'])
-        node.execute_thread("sudo apt update; sudo apt -y install %s" % pkg)
+        node.execute_thread("sudo apt update; sudo DEBIAN_FRONTEND=noninteractive apt -y install %s" % pkg)
 ```
 
 ``` python
@@ -244,7 +244,7 @@ Now, you can open an SSH session on any of the resources as follows:
 
 You can repeat this process (open several terminals) to start a session on each resource. Each terminal session will have a tab in the Jupyter environment, so that you can easily switch between them.
 
-### Simulation on ns2
+## Simulation on ns2
 
 We will start with a simulation experiment, using the ns2 simulator. This experiment highlights the following aspects of network research using simulation:
 
@@ -613,20 +613,19 @@ for i, l in enumerate(lambda_vals):
 
 ``` python
 df = pd.DataFrame.from_dict({'rho': np.array(lambda_vals)/244.14,
-                             'q_avg_sim': [float(q[0].strip()) for q in q_avg_vals]})
+                             'q_avg_sim': q_avg_vals.mean(axis=1),
+                             'q_std_sim': q_avg_vals.std(axis=1)})
 df = df.assign(q_avg_ana = df.rho*df.rho/(1-df.rho) )
-df
-```
-
-``` python
-_ = plt.scatter(df.rho, df.q_avg_sim, label="Simulation")
+_ = plt.errorbar(df.rho, df.q_avg_sim, fmt='o', yerr=df.q_std_sim, label="Simulation")
 _ = plt.plot(df.rho, df.q_avg_ana, label="Analytical")
 _ = plt.legend()
 _ = plt.xlabel("ρ")
 _ = plt.ylabel("Mean queue length (packets)")
 ```
 
-This time, our simulation results are much closer to the predictions of the analytical model - and, we do not see any *systematic* difference in the results.
+The plot above shows the mean queue length for each value of λ, and the standard deviation across different random seeds are also plotted as vertical bars. (If the standard deviation is very small - indicating that the experiment results are all very close to the mean - these vertical bars are practically not visible.)
+
+This time, our simulation results are much closer to the predictions of the analytical model.
 
 ### Delete your slice
 

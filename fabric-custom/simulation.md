@@ -1,5 +1,5 @@
 ::: {.cell .markdown}
-### Simulation on ns2
+## Simulation on ns2
 :::
 
 ::: {.cell .markdown}
@@ -579,15 +579,10 @@ for i, l in enumerate(lambda_vals):
 ::: {.cell .code}
 ```python
 df = pd.DataFrame.from_dict({'rho': np.array(lambda_vals)/244.14,
-                             'q_avg_sim': [float(q[0].strip()) for q in q_avg_vals]})
+                             'q_avg_sim': q_avg_vals.mean(axis=1),
+                             'q_std_sim': q_avg_vals.std(axis=1)})
 df = df.assign(q_avg_ana = df.rho*df.rho/(1-df.rho) )
-df
-```
-:::
-
-::: {.cell .code}
-```python
-_ = plt.scatter(df.rho, df.q_avg_sim, label="Simulation")
+_ = plt.errorbar(df.rho, df.q_avg_sim, fmt='o', yerr=df.q_std_sim, label="Simulation")
 _ = plt.plot(df.rho, df.q_avg_ana, label="Analytical")
 _ = plt.legend()
 _ = plt.xlabel("ρ")
@@ -595,9 +590,10 @@ _ = plt.ylabel("Mean queue length (packets)")
 ```
 :::
 
-
 ::: {.cell .markdown}
 
-This time, our simulation results are much closer to the predictions of the analytical model - and, we do not see any *systematic* difference in the results.
+The plot above shows the mean queue length for each value of λ, and the standard deviation across different random seeds are also plotted as vertical bars. (If the standard deviation is very small - indicating that the experiment results are all very close to the mean - these vertical bars are practically not visible.)
+
+This time, our simulation results are much closer to the predictions of the analytical model.
 
 :::
