@@ -4,10 +4,10 @@ clean:
 	rm index_fabric.md start_fabric.ipynb
 
 FABSNIP := fabric-snippets/fab-config.md fabric-snippets/reserve-resources.md fabric-snippets/configure-resources.md fabric-snippets/offload-off.md fabric-snippets/draw-topo-detailed-labels.md fabric-snippets/log-in.md fabric-snippets/delete-slice.md
-FABCUST := fabric-custom/intro.md fabric-custom/exp-define.md
+FABCUST := fabric-custom/intro.md fabric-custom/background.md fabric-custom/exp-define.md
 start_fabric.ipynb: $(FABSNIP) $(FABCUST)
-	pandoc --wrap=none \
-                -i fabric-custom/intro.md \
+	pandoc --resource-path=../ --embed-resources --standalone --wrap=none \
+                -i fabric-custom/intro.md fabric-custom/background.md \
 		fabric-snippets/fab-config.md \
                 fabric-custom/exp-define.md \
                 fabric-snippets/reserve-resources.md fabric-snippets/extend.md \
@@ -15,10 +15,11 @@ start_fabric.ipynb: $(FABSNIP) $(FABCUST)
 		fabric-snippets/draw-topo-detailed-labels.md fabric-snippets/log-in.md \
 		fabric-snippets/delete-slice.md \
                 -o start_fabric.ipynb  
+		sed -i 's/attachment://g' start_fabric.ipynb
 
 index_fabric.md: $(FABSNIP) $(FABCUST)
 	pandoc --resource-path=images/ --wrap=none \
-                -i fabric-custom/intro.md \
+                -i fabric-custom/intro.md fabric-custom/background.md \
                 fabric-snippets/fab-config.md \
                 fabric-custom/exp-define.md \
                 fabric-snippets/reserve-resources.md fabric-snippets/extend.md \
