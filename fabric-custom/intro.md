@@ -18,3 +18,16 @@ After completing this lab assignment, you should:
 :::
 
 
+:::notes
+
+To run this experiment on FABRIC, sign in to the [FABRIC portal](https://portal.fabric-testbed.net/). Then, click on JupyterHub and sign in to the FABRIC JupyterHub instance.
+
+In the Jupyter environment, open a terminal (File > New > Terminal) and run
+
+```
+git clone https://github.com/teaching-on-testbeds/mm1-methods
+```
+
+Use the file browser in the left sidebar of the Jupyter environment to find the `mm1-methods` directory (you may need to click the refresh icon in the file browser, or wait a few moments, before it is visible). Double click on this directory, then on the `start_fabric.ipynb` file to open this notebook.
+
+:::
