@@ -363,7 +363,6 @@ df
 We can see that the simulation consistently finds a smaller queue size than the analytical model. Let's visualize this -
 
 -   in a single plot, we'll put ρ on the x-axis, and mean queue occupancy on the y-axis.
--   we'll the y-axis a log10 scale.
 -   we'll plot each of the six simulation results as a point, and plot the prediction of the analytical model as a line.
 
 ``` python
@@ -626,6 +625,512 @@ _ = plt.ylabel("Mean queue length (packets)")
 The plot above shows the mean queue length for each value of λ, and the standard deviation across different random seeds are also plotted as vertical bars. (If the standard deviation is very small - indicating that the experiment results are all very close to the mean - these vertical bars are practically not visible.)
 
 This time, our simulation results are much closer to the predictions of the analytical model.
+
+## Testbed experiment on FABRIC
+
+Now we'll move on to an equivalent experiment, using the FABRIC testbed. This experiment highlights the following aspects of network research using simulation:
+
+-   Various details of the implementation of the network stack on an experimental host may cause our experiment assumptions to be violated, affecting the validity of the results.
+-   Compute capabilities can also affect the experiment results.
+-   Validating experiment assumptions is an important "sanity check" to catch some problems in the experiment.
+
+``` python
+# run this cell to "pick up" where you left off in a new session
+from fabrictestbed_extensions.fablib.fablib import FablibManager as fablib_manager
+fablib = fablib_manager() 
+slice_name="mm1-" + fablib.get_bastion_username()
+slice = fablib.get_slice(name=slice_name)
+```
+
+To generate traffic with the desired distribution of packet sizes and interarrival times in this experiment, we will use a software traffic generator called D-ITG. We will start by learning how to use D-ITG.
+
+You will need an SSH session on the "romeo" host and one on the "juliet" host.
+
+D-ITG comes with a suite of utilities for generating traffic, receiving traffic, parsing log files, and automating experiments. We will use learn how to use three of the D-ITG utilities: the sender (traffic generator), the receiver (traffic sink), and the log file decoder. We will run the sender on the client node, the receiver on the server node, and the log file decoder on both the client and server node.
+
+Try it now with the following command on "juliet", the receiver (server) node:
+
+    ITGRecv
+
+Leave that running, and on "romeo", the sender (client) node, run:
+
+    ITGSend -a juliet -l sender.log -x receiver.log -E 200 -e 512 -T UDP -t 240000
+
+This will send UDP traffic to "juliet"" with a packet interarrival time that is exponentially distributed with mean 200 packets/second, packet size that is exponentially distributed with mean 512 bytes. It will run for 4 minutes (240000 ms), and will save the log files at the client node and server node with file names "sender.log" and "receiver.log" respectively.
+
+Wait for the sender to finish, then stop the receiver process with Ctrl+C. Then, open the log on the receiver side with
+
+    ITGDec receiver.log
+
+and on the sender side with
+
+    ITGDec sender.log
+
+Here you can see some basic aggregate information about the generated traffic flow(s). More detailed information is available from the log file using various arguments; see the documentation for details. (Note that the one-way delay information reported is not reliable, since the clocks on the two nodes are not synchronized. You may even see a negative delay reported.)
+
+In general, the basic usage of the sender will be as follows:
+
+    ITGSend -l SENDER-LOG -x RECEIVER-LOG -E MEAN-ARRIVAL-RATE -e MEAN-PACKET-SIZE  -t EXPERIMENT-DURATION -T UDP
+
+where SENDER-LOG is the name to use for the log file at the sender side, RECEIVER-LOG is the name to use for the log file at the receiver side, MEAN-ARRIVAL-RATE is the mean rate at which to send traffic in packets per second (the -E indicates that the arrival rate will be exponentially distributed), MEAN-PACKET-SIZE is the mean size of the data payload of the packet in bytes (the -e indicates that the packet size will be exponentially distributed), and EXPERIMENT-DURATION is the length of the experiment in milliseconds (the default is 10 seconds). You can choose MEAN-ARRIVAL-RATE and MEAN-PACKET-SIZE to create a traffic pattern with any λ and any μ that you want. (For our experiments today, we will only vary λ and will keep the mean packet size constant.)
+
+In addition to traffic generation, we also need some way to record data about the packets that arrive at the router. We will use `tshark`, a utility similar to `tcpdump` but with more advanced display and data analysis options, to capture incoming traffic on the router node. The usage of this command will be:
+
+    sudo tshark -i $(ip route get 10.0.1.100 | grep -oP "(?<=dev )[^ ]+") -f "udp and port 8999" -T fields -e frame.time_delta_displayed -e frame.len -E separator=, > output.csv
+
+Here,
+
+-   the `-i` flag specifies which network interface to listen on (this will be the experiment interface through which traffic enters the router from the "romeo" node),
+-   we use `-f "udp and port 8999"` to filter out traffic that is not generated by D-ITG,
+-   we specify a list of fields to print with `-T` fields:
+    -   `frame.time_delta_displayed` is the time delta between displayed frames
+    -   `frame.len` is the size of the frame, in bytes
+-   and we use a comma to separate fields in the output, with `-E separator=,`
+
+We also redirect the output a file called "output.csv".
+
+Try it now:
+
+-   Run the `tshark` command above on on the router node
+-   Re-run the D-ITG sender and receiver commands on your romeo and juliet nodes.
+
+After these have finished, stop the `tshark` and D-ITG receiver with Ctrl+C. Then, the following cell will transfer the "output.csv" file to your workspace.
+
+``` python
+slice.get_node("router").download_file("output.csv", "/home/ubuntu/output.csv")
+```
+
+Find this file in the file browser and open it, and note that the packet interarrival times and sizes are recorded.
+
+To realize an M/M/1 queue, we need two more "pieces", though:
+
+-   We need to set the service rate of the queue (at the router!)
+-   and we need a way to measure the queue length.
+
+Let's check the current service rate of the queue - we'll use `iperf3` to estimate the data rate of the underlying network:
+
+``` python
+import time
+slice.get_node("juliet").execute("iperf3 -s -1 -D")
+time.sleep(5)
+_ = slice.get_node("romeo").execute("iperf3 -t 30 -i 10 -c juliet")
+```
+
+We will use the Linux Traffic Control (`tc`) utility to manipulate queue settings, and we will use a type of queue called an `htb` (Hierarchical Token Bucket) that limits the service rate. As packets arrive at the router, they will wait in a queue (in the order in which they arrived, so FIFO - first in, first out), and they will be released only at the rate that we specify. Also, we will add a `bfifo` queue with a large capacity (500 mbit) (so that packets will not be dropped).
+
+On the router, run
+
+    # the first line may raise an error "Error: Cannot delete qdisc with handle of zero."
+    # this is fine, and not a concern
+    sudo tc qdisc del dev $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") root  
+    sudo tc qdisc replace dev $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") root handle 1: htb default 3  
+    sudo tc class add dev $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1: classid 1:3 htb rate 1mbit  
+    sudo tc qdisc add dev $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1:3 handle 3: bfifo limit 500mbit  
+
+to configure this queue. Then, repeat the `iperf3` test to check the service rate of the queue:
+
+``` python
+slice.get_node("juliet").execute("iperf3 -s -1 -D")
+time.sleep(5)
+_ = slice.get_node("romeo").execute("iperf3 -t 30 -i 10 -c juliet")
+```
+
+The `tc` tool includes a command to show the current state of a queue. Try running it, on the router node, using command substitution to specify that we want to see the state of the egress queue:
+
+    tc -p -s -d qdisc show dev $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+")
+
+The output of this command may look something like this:
+
+    qdisc htb 1: root refcnt 2 r2q 10 default 3 direct_packets_stat 8995 ver 3.17 direct_qlen 1000
+     Sent 159261600 bytes 1043 pkt (dropped 0, overlimits 0 requeues 0) 
+     backlog 119606b 58p requeues 0
+    qdisc bfifo 8002: parent 1:3 limit 64000Kb
+     Sent 31322502 bytes 849 pkt (dropped 0, overlimits 0 requeues 0) 
+     backlog 119606b 58p requeues 0
+
+This output shows that the active queuing discipline (`qdisc`) on my interface is Hierarchical Token Bucket (`htb`). I can also see the current queue statistics. The most relevant of these (for our purposes) is the "backlog" information, which tells us the number of bytes and the number of packets currently in the queue. Also important is the "dropped" value, which tells you whether packets were dropped by the queue, and how many.
+
+For your convenience, I have written a simple bash script that you can run on the router node to watch the queue occupancy. The following cell will transfer the script to your router node, and then make it executable.
+
+``` python
+slice.get_node("router").upload_file("queuemonitor.sh", "/home/ubuntu/queuemonitor.sh")
+slice.get_node("router").execute("chmod a+x /home/ubuntu/queuemonitor.sh")
+```
+
+Now that we have all of the "pieces", let's try running one instance of the experiment. You will need one terminal on the "romeo" host, one on the "juliet" host, and two on the "router". Then,
+
+-   run `ITGRecv` on juliet, and leave it running
+
+-   in one terminal on the router, run
+
+```{=html}
+<!-- -->
+```
+    sudo tshark -i $(ip route get 10.0.1.100 | grep -oP "(?<=dev )[^ ]+") -f "udp and port 8999" -T fields -e frame.time_delta_displayed -e frame.len -E separator=, > output.csv
+
+-   in a second terminal on the router, run
+
+```{=html}
+<!-- -->
+```
+    /home/ubuntu/queuemonitor.sh $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") 240 0.1 > router.txt
+
+-   then, immediately run on romeo:
+
+```{=html}
+<!-- -->
+```
+    ITGSend -a juliet -l sender.log -x receiver.log -E 200 -e 512 -T UDP -t 240000
+
+When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processes. Then, get the average queue occupancy by running the following on the router node:
+
+    cat router.txt | sed 's/\p / /g' | awk  '{ sum += $54 } END { if (NR > 0) print sum / NR }'
+
+As with our simulation experiment, let us systematically run this experiment and find the mean value of queue occupancy for the following values of λ: 225.0, 200.0, 175.0, 150.0, 125.0. Use the following cell:
+
+```` python
+lambda_vals = [225.0, 200.0, 175.0, 150.0, 125.0]
+q_avg_vals = []
+for l in lambda_vals:
+    print(f"Now running experiment for lambda = {l}")
+    slice.get_node("juliet").execute_thread("ITGRecv")
+    time.sleep(2)
+    slice.get_node("router").execute_thread('/home/ubuntu/queuemonitor.sh $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") 240 0.1 > router.txt')
+    slice.get_node("romeo").execute(f"ITGSend -a juliet -l sender.log -x receiver.log -E {l} -e 512 -T UDP -t 240000")
+    time.sleep(2)
+    slice.get_node("juliet").execute_thread("killall ITGRecv")
+    q_avg = slice.get_node("router").execute("cat router.txt | sed 's/\p / /g' | awk  '{ sum += $54 } END { if (NR > 0) print sum / NR }' ")
+    q_avg_vals.append(q_avg)
+    ```
+
+
+
+
+Then, we'll compile the testbed experiment results and compare to the predictions of the analytical model in a table:
+
+
+
+```python
+import pandas as pd
+import numpy as np
+df = pd.DataFrame.from_dict({'rho': np.array(lambda_vals)/244.14,
+                             'q_avg_exp': [float(q[0].strip()) for q in q_avg_vals]})
+df = df.assign(q_avg_ana = df.rho*df.rho/(1-df.rho) )
+df
+````
+
+Let's visualize this -
+
+-   in a single plot, we'll put ρ on the x-axis, and mean queue occupancy on the y-axis.
+-   we'll plot each of the six testbed experiment results as a point, and plot the prediction of the analytical model as a line.
+
+``` python
+import matplotlib.pyplot as plt
+_ = plt.scatter(df.rho, df.q_avg_exp, label="Testbed")
+_ = plt.plot(df.rho, df.q_avg_ana, label="Analytical")
+_ = plt.legend()
+_ = plt.xlabel("ρ")
+_ = plt.ylabel("Mean queue length (packets)")
+```
+
+Our experiment results are not in line with the predictions of the analytical model. We should "sanity check" the experiment to see if our assumptions about how the experiment works are valid.
+
+In our initial experiment, we assume that:
+
+-   The packet sizes are exponentially distributed with mean size 512 bytes, so that the mean service rate at the router is exponentially distributed with mean 244.1 packets/second.
+-   The traffic is Poisson with λ = 200 packets/second (at least, for the initial experiment that we ran on each platform).
+-   The queue capacity is effectively infinite (i.e. no packets are dropped).
+
+Let us try and validate how well these assumptions are realized in our testbed experiment.
+
+First, we will repeat our experiment "by hand" with the desired settings (specifically, λ = 200) so that the log files on the hosts and router will reflect this setting.
+
+-   run `ITGRecv` on juliet, and leave it running
+
+-   in one terminal on the router, run
+
+```{=html}
+<!-- -->
+```
+    sudo tshark -i $(ip route get 10.0.1.100 | grep -oP "(?<=dev )[^ ]+") -f "udp and port 8999" -T fields -e frame.time_delta_displayed -e frame.len -E separator=, > output.csv
+
+-   in a second terminal on the router, run
+
+```{=html}
+<!-- -->
+```
+    /home/ubuntu/queuemonitor.sh $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") 240 0.1 > router.txt
+
+-   then, immediately run on romeo:
+
+```{=html}
+<!-- -->
+```
+    ITGSend -a juliet -l sender.log -x receiver.log -E 200 -e 512 -T UDP -t 240000
+
+When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processes.
+
+
+    :::
+
+
+    ::: {.cell .markdown}
+
+    Traffic generators may not perfectly represent the model they are supposed to - traffic generators (including D-ITG) do not always achieve exactly what they have promised. Let us try and see how well D-ITG mimics an exponential packet interarrival time and exponential packet size distribution for our circumstances: with data rates of approximately 200 packets/second, and an average packet size of 512 bytes.
+
+    :::
+
+    ::: {.cell .markdown}
+
+    First, consider the average packet size, which we hope will be 512 bytes.  We actually have four records of packet size:
+
+    :::
+
+    ::: {.cell .code}
+    ```python
+    # the traffic generator log at the sender
+    # compute "Bytes received"/"Total packets" to see the application's estimate of the mean packet size.  
+    _ = slice.get_node("romeo").execute("ITGDec sender.log")
+
+``` python
+# the traffic generator log at the receiver
+# compute "Bytes received"/"Total packets" to see the application's estimate of the mean packet size.  
+_ = slice.get_node("juliet").execute("ITGDec receiver.log")
+```
+
+``` python
+# the router log at the beginning of the experiment
+# look for "Sent A bytes B packets"
+_ = slice.get_node("router").execute("head -n 1 router.txt")
+```
+
+``` python
+# the router log at the end of the experiment 
+# look for "Sent C bytes D packets"
+# compute (C - A)/(D - B)
+_ = slice.get_node("router").execute("tail -n 1 router.txt")
+```
+
+``` python
+# the tshark log at the router - mean of second column (packet size)
+_ = slice.get_node("router").execute("cat output.csv | awk -F  ',' '{ sum += $2; n++ } END { if (n > 0) print sum / n; }'")
+```
+
+You will notice that according to the router, the mean packet size is higher than expected. We'll revisit this, but let's also look at the distribution of packet sizes, from the `tshark` log at the router.
+
+``` python
+import pandas as pd
+import matplotlib.pyplot as plt
+slice.get_node("router").download_file("output.csv", "/home/ubuntu/output.csv")
+df = pd.read_csv("output.csv", names=['interarrival', 'size_B'])
+_ = plt.hist(df.size_B, bins = np.arange(0, 2500, 10))
+_ = plt.xlabel("Packet size (B)")
+_ = plt.ylabel("Number of packets of this size observed")
+_ = plt.yscale('log')
+```
+
+``` python
+df.size_B.describe()
+```
+
+Notice that the distribution is truncated at both ends! The minimum packet size is 62 bytes, and the maximum packet size is 1514 B. We observe a much higher number of \~1514-byte frames than expected, and a much higher number of \~62-byte frames than expected.
+
+To explain this result, we need to use our knowledge about computer network protocols!
+
+-   The packet size reported by `tshark` is the Ethernet frame length, including the Ethernet payload and 14 byte Ethernet header. We know that the IP packet size will be 14 bytes less than this (since the Ethernet header is not included) and the UDP datagram size is 20 bytes less than this (since the 20 byte IP header is not included). The application layer payload is then 8 bytes less than this (because the 8 byte UDP header is not included). This explains part of the difference in the *average* result between D-ITG's logs (which do not include) and the measurements at the router.
+-   The minimum size of an Ethernet frame is 64 bytes.(This is to ensure that the transmission time is longer than the propagation delay, so that CSMA/CD can observe the transmission state.) In our experiment, we see frames as small as 62 bytes because 2 bytes of padding will be added to the Ethernet header by the interface when it is transmitted, but after it is seen by `tshark`. Smaller packets will be padded to 62 bytes.
+-   On an interface with MTU of 1500 bytes (standard Ethernet MTU), the maximum frame size is 1514 bytes (1500 byte payload plus 14 byte header). Any packet larger than this will be fragmented. Thus, large packets generated by D-ITG will be transmitted as a 1514 B frame (1500 B + 14 B Ethernet header) followed by one or more fragments. Therefore, our distribution includes many more 1514 B frames than expected. We also see more frames than expected between 62-1514 bytes, because the fragments will be counted in this range.
+
+Let us explore this further by sending some packets with a *constant* size (`-c` in D-ITG). Note that in the `tcpdump` output below, the first "length" is the frame length and the second "length" is the UDP payload length:
+
+``` python
+# try to send packets with constant size 1B
+slice.get_node("juliet").execute_thread("ITGRecv")
+time.sleep(2)
+slice.get_node("romeo").execute_thread(f"ITGSend -a juliet -l sender.log -x receiver.log -E 200 -c 1 -T UDP -t 10000")
+slice.get_node("router").execute('sudo tcpdump -i $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") -c 5 -n -e "udp" ')
+slice.get_node("juliet").execute_thread("killall ITGRecv")
+slice.get_node("romeo").execute_thread("killall ITGSend")
+```
+
+``` python
+# try to send packets with constant size 512B
+slice.get_node("juliet").execute_thread("ITGRecv")
+time.sleep(2)
+slice.get_node("romeo").execute_thread(f"ITGSend -a juliet -l sender.log -x receiver.log -E 200 -c 512 -T UDP -t 10000")
+slice.get_node("router").execute('sudo tcpdump -i $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") -c 5 -n -e "udp" ')
+slice.get_node("juliet").execute_thread("killall ITGRecv")
+slice.get_node("romeo").execute_thread("killall ITGSend")
+```
+
+``` python
+# try to send packets with constant size 1472B - max size without fragmentation
+slice.get_node("juliet").execute_thread("ITGRecv")
+time.sleep(2)
+slice.get_node("romeo").execute_thread(f"ITGSend -a juliet -l sender.log -x receiver.log -E 200 -c 1472 -T UDP -t 10000")
+slice.get_node("router").execute('sudo tcpdump -i $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") -c 5 -n -e "udp" ')
+slice.get_node("juliet").execute_thread("killall ITGRecv")
+slice.get_node("romeo").execute_thread("killall ITGSend")
+```
+
+``` python
+# try to send packets with constant size 2400B
+slice.get_node("juliet").execute_thread("ITGRecv")
+time.sleep(2)
+slice.get_node("romeo").execute_thread(f"ITGSend -a juliet -l sender.log -x receiver.log -E 200 -c 2400 -T UDP -t 10000")
+slice.get_node("router").execute('sudo tcpdump -i $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") -c 5 -n -e "udp" ')
+slice.get_node("juliet").execute_thread("killall ITGRecv")
+slice.get_node("romeo").execute_thread("killall ITGSend")
+```
+
+While we cannot do anything about the minimum Ethernet frame size, and we will have to accept *some* maximum frame size, we *can* change the Ethernet MTU in this instance, because the network we are working with supports "jumbo" frames up to 9000 bytes.
+
+On each of romeo, juliet, and the router, use `ip addr` to identify the name of the experiment interface(s) (two on the router). Then, use
+
+    sudo ip link set dev [IFACE] mtu 9000
+
+(substituting the interface name) to change the MTU. Then, check that the change has been applied:
+
+``` python
+# try to send packets with constant size 2400B
+slice.get_node("juliet").execute_thread("ITGRecv")
+time.sleep(2)
+slice.get_node("romeo").execute_thread(f"ITGSend -a juliet -l sender.log -x receiver.log -E 200 -c 2400 -T UDP -t 10000")
+slice.get_node("router").execute('sudo tcpdump -i $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") -c 5 -n -e "udp" ')
+slice.get_node("juliet").execute_thread("killall ITGRecv")
+slice.get_node("romeo").execute_thread("killall ITGSend")
+```
+
+Now we will repeat our experiment "by hand" with the desired settings (specifically, λ = 200), and we will also decrease the mean packet size in D-ITG by 42 bytes (to account for the packet headers that will be added by UDP, IPv4, and Ethernet).
+
+-   run `ITGRecv` on juliet, and leave it running
+
+-   in one terminal on the router, run
+
+```{=html}
+<!-- -->
+```
+    sudo tshark -i $(ip route get 10.0.1.100 | grep -oP "(?<=dev )[^ ]+") -f "udp and port 8999" -T fields -e frame.time_delta_displayed -e frame.len -E separator=, > output.csv
+
+-   in a second terminal on the router, run
+
+```{=html}
+<!-- -->
+```
+    /home/ubuntu/queuemonitor.sh $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") 240 0.1 > router.txt
+
+-   then, immediately run on romeo (note the different mean packet size!):
+
+```{=html}
+<!-- -->
+```
+    ITGSend -a juliet -l sender.log -x receiver.log -E 200 -e 470 -T UDP -t 240000
+
+When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processes. Then, let's look at the distribution of packet sizes again:
+
+
+    :::
+
+
+    ::: {.cell .code}
+    ```python
+    slice.get_node("router").download_file("output.csv", "/home/ubuntu/output.csv")
+    df = pd.read_csv("output.csv", names=['interarrival', 'size_B'])
+    _ = plt.hist(df.size_B, bins = np.arange(0, 2500, 10))
+    _ = plt.xlabel("Packet size (B)")
+    _ = plt.ylabel("Number of packets of this size observed")
+    _ = plt.yscale('log')
+
+``` python
+df.size_B.describe()
+```
+
+While still not a perfect representation of our model (there is still a minimum frame size, and still fragmentation of frames larger than "jumbo" size), this will be a substantial improvement over the previous result.
+
+Let's check the packet interarrival time for our testbed experiment. We expect a mean interarrival time of 0.005 second (1/200 packets/second).
+
+``` python
+_ = plt.hist(df.interarrival, bins = np.arange(0, 0.1, 0.001))
+_ = plt.xlabel("Interarrival time (s)")
+_ = plt.ylabel("Number of packets of this size observed")
+_ = plt.yscale('log')
+```
+
+``` python
+df.interarrival.mean()
+```
+
+Finally, we will validate the assumption that the queue size is effectively infinite - make sure no packets are dropped.
+
+-   Look at the D-ITG receiver and sender logs, and make sure the same number of packets are received as are sent.
+
+-   Also look at the queue monitor output - make sure that the number of packets dropped is zero, or at least that it is the same at the beginning and end of the queue monitor output file (indicating that if any packets were dropped, they were dropped before the experiment began.
+
+``` python
+# the traffic generator log at the sender
+# compute "Bytes received"/"Total packets" to see the application's estimate of the mean packet size.  
+_ = slice.get_node("romeo").execute("ITGDec sender.log")
+```
+
+``` python
+# the traffic generator log at the receiver
+# compute "Bytes received"/"Total packets" to see the application's estimate of the mean packet size.  
+_ = slice.get_node("juliet").execute("ITGDec receiver.log")
+```
+
+``` python
+# the router log at the beginning of the experiment
+# look for "Sent A bytes B packets"
+_ = slice.get_node("router").execute("head -n 1 router.txt")
+```
+
+``` python
+# the router log at the end of the experiment 
+# look for "Sent C bytes D packets"
+# compute (C - A)/(D - B)
+_ = slice.get_node("router").execute("tail -n 1 router.txt")
+```
+
+Now that we have validated our experiment settings (and made changes where necessary!), let us repeat the experiment.
+
+(We will also pass a seed to D-ITG, for repeatable results, and run five trials for each value. By default, when a seed is not specified with `-s`, D-ITG uses a randomly generated seed each time.)
+
+This will take a while, since we are going to run five experiments for each value of λ! You can run all three cells in order (without waiting for the first to complete before running the next one), step away, and come back later to see the results.
+
+``` python
+lambda_vals = [225.0, 200.0, 175.0, 150.0, 125.0]
+seeds = [0.1,0.2,0.3,0.4,0.5]
+q_avg_vals = np.zeros(shape=(len(lambda_vals), len(seeds)))
+for i, l in enumerate(lambda_vals):
+    for j, s in enumerate(seeds):
+        print(f"Now running experiment {s} for lambda = {l}")
+        slice.get_node("juliet").execute_thread("ITGRecv")
+        time.sleep(2)
+        slice.get_node("router").execute_thread('/home/ubuntu/queuemonitor.sh $(ip route get 10.0.2.100 | grep -oP "(?<=dev )[^ ]+") 240 0.1 > router.txt')
+        # note the 470 byte mean packet size! this should be 512 byte with headers
+        slice.get_node("romeo").execute(f"ITGSend -a juliet -l sender.log -x receiver.log -E {l} -e 470 -T UDP -t 240000 -s {s}")
+        time.sleep(2)
+        slice.get_node("juliet").execute_thread("killall ITGRecv")
+        q_avg = slice.get_node("router").execute("cat router.txt | sed 's/\p / /g' | awk  '{ sum += $54 } END { if (NR > 0) print sum / NR }' ")
+        q_avg_float = float(q_avg[0].strip())
+        q_avg_vals[i, j] = q_avg_float
+```
+
+``` python
+df = pd.DataFrame.from_dict({'rho': np.array(lambda_vals)/244.14,
+                             'q_avg_exp': q_avg_vals.mean(axis=1),
+                             'q_std_exp': q_avg_vals.std(axis=1)})
+df = df.assign(q_avg_ana = df.rho*df.rho/(1-df.rho) )
+_ = plt.errorbar(df.rho, df.q_avg_exp, fmt='o', yerr=df.q_std_exp, label="Testbed")
+_ = plt.plot(df.rho, df.q_avg_ana, label="Analytical")
+_ = plt.legend()
+_ = plt.xlabel("ρ")
+_ = plt.ylabel("Mean queue length (packets)")
+```
+
+The plot above shows the mean queue length for each value of λ, and the standard deviation across different random seeds are also plotted as vertical bars. (If the standard deviation is very small - indicating that the experiment results are all very close to the mean - these vertical bars are practically not visible.)
+
+This time, our testbed experiment results consistently show a *smaller* queue size than the predictions of the analytical model. Although we have "fixed" some issues related to the packet size distribution, we can see that there is still some systematic difference between our experiment and the analytical model it tries to represent.
 
 ### Delete your slice
 

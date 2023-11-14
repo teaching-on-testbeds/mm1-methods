@@ -187,7 +187,6 @@ df
 We can see that the simulation consistently finds a smaller queue size than the analytical model.  Let's visualize this - 
 
 * in a single plot, we'll put ρ on the x-axis, and mean queue occupancy on the y-axis. 
-* we'll the y-axis a log10 scale. 
 * we'll plot each of the six simulation results as a point, and plot the prediction of the analytical model as a line.
 
 :::
