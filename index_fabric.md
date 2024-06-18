@@ -865,27 +865,15 @@ First, we will repeat our experiment "by hand" with the desired settings (specif
 
 When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processes.
 
+Traffic generators may not perfectly represent the model they are supposed to - traffic generators (including D-ITG) do not always achieve exactly what they have promised. Let us try and see how well D-ITG mimics an exponential packet interarrival time and exponential packet size distribution for our circumstances: with data rates of approximately 200 packets/second, and an average packet size of 512 bytes.
 
-    :::
+First, consider the average packet size, which we hope will be 512 bytes. We actually have four records of packet size:
 
-
-    ::: {.cell .markdown}
-
-    Traffic generators may not perfectly represent the model they are supposed to - traffic generators (including D-ITG) do not always achieve exactly what they have promised. Let us try and see how well D-ITG mimics an exponential packet interarrival time and exponential packet size distribution for our circumstances: with data rates of approximately 200 packets/second, and an average packet size of 512 bytes.
-
-    :::
-
-    ::: {.cell .markdown}
-
-    First, consider the average packet size, which we hope will be 512 bytes.  We actually have four records of packet size:
-
-    :::
-
-    ::: {.cell .code}
-    ```python
-    # the traffic generator log at the sender
-    # compute "Bytes received"/"Total packets" to see the application's estimate of the mean packet size.  
-    _ = slice.get_node("romeo").execute("ITGDec sender.log")
+``` python
+# the traffic generator log at the sender
+# compute "Bytes received"/"Total packets" to see the application's estimate of the mean packet size.  
+_ = slice.get_node("romeo").execute("ITGDec sender.log")
+```
 
 ``` python
 # the traffic generator log at the receiver
