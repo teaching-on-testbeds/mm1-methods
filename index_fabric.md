@@ -1011,18 +1011,14 @@ Now we will repeat our experiment "by hand" with the desired settings (specifica
 
 When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processes. Then, let's look at the distribution of packet sizes again:
 
-
-    :::
-
-
-    ::: {.cell .code}
-    ```python
-    slice.get_node("router").download_file("output.csv", "/home/ubuntu/output.csv")
-    df = pd.read_csv("output.csv", names=['interarrival', 'size_B'])
-    _ = plt.hist(df.size_B, bins = np.arange(0, 2500, 10))
-    _ = plt.xlabel("Packet size (B)")
-    _ = plt.ylabel("Number of packets of this size observed")
-    _ = plt.yscale('log')
+``` python
+slice.get_node("router").download_file("output.csv", "/home/ubuntu/output.csv")
+df = pd.read_csv("output.csv", names=['interarrival', 'size_B'])
+_ = plt.hist(df.size_B, bins = np.arange(0, 2500, 10))
+_ = plt.xlabel("Packet size (B)")
+_ = plt.ylabel("Number of packets of this size observed")
+_ = plt.yscale('log')
+```
 
 ``` python
 df.size_B.describe()

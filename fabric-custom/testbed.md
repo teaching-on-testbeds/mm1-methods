@@ -566,7 +566,6 @@ ITGSend -a juliet -l sender.log -x receiver.log -E 200 -e 470 -T UDP -t 240000
 ```
 
 When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processes. Then, let's look at the distribution of packet sizes again:
-```
 
 :::
 
