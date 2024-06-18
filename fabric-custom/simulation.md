@@ -455,8 +455,10 @@ Third, we will validate the assumption that the queue size is effectively infini
 :::
 
 
-::: {.cell .markdown}
+::: {.cell .code}
+```python
 _ = slice.get_node("romeo").execute("tail -n 1 qm.out")
+```
 :::
 
 

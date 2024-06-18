@@ -529,7 +529,9 @@ We should see that the mean interarrival time is similar to our expectation. The
 
 Third, we will validate the assumption that the queue size is effectively infinite - at least, for this experiment. Check the last line of the queue monitor output file, and see if any packets are reported as being dropped (8th column in the "qm.out" file):
 
-\_ = slice.get_node("romeo").execute("tail -n 1 qm.out")
+``` python
+_ = slice.get_node("romeo").execute("tail -n 1 qm.out")
+```
 
 Finally, now that our assumptions are validated, we want to be able to run multiple trials as independent random experiments.
 
