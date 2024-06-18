@@ -273,7 +273,7 @@ for l in lambda_vals:
     slice.get_node("juliet").execute_thread("killall ITGRecv")
     q_avg = slice.get_node("router").execute("cat router.txt | sed 's/\p / /g' | awk  '{ sum += $54 } END { if (NR > 0) print sum / NR }' ")
     q_avg_vals.append(q_avg)
-    ```
+```
 :::
 
 

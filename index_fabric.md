@@ -788,7 +788,7 @@ When the experiment ends, use Ctrl+C to stop the `ITGRecv` and `tshark` processe
 
 As with our simulation experiment, let us systematically run this experiment and find the mean value of queue occupancy for the following values of λ: 225.0, 200.0, 175.0, 150.0, 125.0. Use the following cell:
 
-```` python
+``` python
 lambda_vals = [225.0, 200.0, 175.0, 150.0, 125.0]
 q_avg_vals = []
 for l in lambda_vals:
@@ -801,23 +801,18 @@ for l in lambda_vals:
     slice.get_node("juliet").execute_thread("killall ITGRecv")
     q_avg = slice.get_node("router").execute("cat router.txt | sed 's/\p / /g' | awk  '{ sum += $54 } END { if (NR > 0) print sum / NR }' ")
     q_avg_vals.append(q_avg)
-    ```
-
-
-
+```
 
 Then, we'll compile the testbed experiment results and compare to the predictions of the analytical model in a table:
 
-
-
-```python
+``` python
 import pandas as pd
 import numpy as np
 df = pd.DataFrame.from_dict({'rho': np.array(lambda_vals)/244.14,
                              'q_avg_exp': [float(q[0].strip()) for q in q_avg_vals]})
 df = df.assign(q_avg_ana = df.rho*df.rho/(1-df.rho) )
 df
-````
+```
 
 Let's visualize this -
 
